@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  reachability-analyzer-blog
+
+  Sample SAM Template for reachability-analyzer-blog
+
+Globals:
+  Function:
+    Timeout: 60
+
+Parameters:
+  SnsTopicName:
+    Type: String
+    Description: "Enter a name for the SNS Topic which will be used for publishing failed assessments."
+  VPCCidrBlock:
+    Type: String
+    Description: "Enter a CIDR block for the VPC which will be used to host EC2 instances used for reachability assessment."
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$
+  SubnetCidrBlock:
+    Type: String
+    Description: "Enter a CIDR block used for a subnet within the VPC subnet CIDR block."
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$
+
+Resources:
+  InstanceReachabilityAssessmentVPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: !Ref VPCCidrBlock
+  InstanceReachabilityIGW:
+    Type: AWS::EC2::InternetGateway
+  InstanceReachabilityVPCAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref InstanceReachabilityAssessmentVPC
+      InternetGatewayId: !Ref InstanceReachabilityIGW
+  InstanceReachabilitySubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref SubnetCidrBlock
+      MapPublicIpOnLaunch: True
+      VpcId: !Ref InstanceReachabilityAssessmentVPC
+  InstanceReachabilityRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InstanceReachabilityAssessmentVPC
+  InstanceReachabilityDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InstanceReachabilityIGW
+      RouteTableId: !Ref InstanceReachabilityRouteTable
+  InstanceReachabilitySubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InstanceReachabilityRouteTable
+      SubnetId: !Ref InstanceReachabilitySubnet
+  InstanceReachabilitySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: "Security Group allowing HTTP and HTTPS access from everywhere"
+      GroupName: "InstanceReachabilitySecurityGroup"
+      SecurityGroupIngress:
+        -
+          CidrIp: '0.0.0.0/0'
+          Description: 'HTTP'
+          FromPort: 80
+          ToPort: 80
+          IpProtocol: tcp
+        -
+          CidrIp: '0.0.0.0/0'
+          Description: 'HTTPS'
+          FromPort: 443
+          ToPort: 443
+          IpProtocol: tcp
+      VpcId: !Ref InstanceReachabilityAssessmentVPC
+  InstanceReachabilityInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0a36eb8fadc976275
+      InstanceType: 't2.micro'
+      SecurityGroupIds: 
+        - !Ref InstanceReachabilitySecurityGroup
+      SubnetId: !Ref InstanceReachabilitySubnet
+  InstanceReachabilityNetworkInsightPathHTTP:
+    Type: AWS::EC2::NetworkInsightsPath
+    Properties:
+      Destination: !Ref InstanceReachabilityInstance
+      DestinationPort: 80
+      Protocol: tcp
+      Source: !Ref InstanceReachabilityIGW
+      SourceIp: '0.0.0.0'
+  InstanceReachabilityNetworkInsightPathHTTPS:
+    Type: AWS::EC2::NetworkInsightsPath
+    Properties:
+      Destination: !Ref InstanceReachabilityInstance
+      DestinationPort: 443
+      Protocol: tcp
+      Source: !Ref InstanceReachabilityIGW
+      SourceIp: '0.0.0.0'
+  InstanceReachabilityAssessmentSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: !Ref SnsTopicName
+      TopicName: !Ref SnsTopicName
+  InstanceReachabilityAssessmentRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      Description: "IAM Role for the Instance Reachability Assessment Lambda. Allows lambda to decribe instances, publish to an SNS topic, describe network insights analyses and paths, and start network insights analysis."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal: 
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies: 
+        - 
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - 
+                Effect: Allow
+                Action: 
+                  - ec2:GetTransitGatewayRouteTablePropagations
+                  - ec2:DescribeTransitGatewayPeeringAttachments
+                  - ec2:SearchTransitGatewayRoutes
+                  - ec2:DescribeTransitGatewayRouteTables
+                  - ec2:DescribeTransitGatewayVpcAttachments
+                  - ec2:DescribeTransitGatewayAttachments
+                  - ec2:DescribeTransitGateways
+                  - ec2:GetManagedPrefixListEntries
+                  - ec2:DescribeManagedPrefixLists
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeCustomerGateways
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInternetGateways
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeNetworkAcls
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribePrefixLists
+                  - ec2:DescribeRegions
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeVpcPeeringConnections
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeVpnConnections
+                  - ec2:DescribeVpnGateways
+                  - ec2:DescribeVpcEndpointServiceConfigurations
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - tiros:CreateQuery
+                  - tiros:GetQueryAnswer
+                  - tiros:GetQueryExplanation
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ec2:StartNetworkInsightsAnalysis
+                  - ec2:DescribeNetworkInsightsAnalyses
+                  - ec2:DescribeNetworkInsightsPaths
+                Resource: "*"
+          PolicyName: "InstanceReachabilityAssessmentEc2Permissions"
+        -
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - 
+                Effect: Allow
+                Action: 
+                  - sns:Publish
+                Resource: !Ref InstanceReachabilityAssessmentSNSTopic
+          PolicyName: "InstanceReachabilityAssessmentSNSPermission"
+        -
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - 
+                Effect: Allow
+                Action: 
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                Resource: "*"
+          PolicyName: "InstanceReachabilityAssessmentCloudwatchLogsPermission"
+      RoleName: "InstanceReachabilityAssessmentRole"
+  InstanceReachabilityAssessmentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: instance_reachability_assessment/
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Role: !GetAtt InstanceReachabilityAssessmentRole.Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref InstanceReachabilityAssessmentSNSTopic
+      Events:
+        OnSGChange:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              detail:
+                eventName:
+                  - AuthorizeSecurityGroupIngress
+                  - AuthorizeSecurityGroupEngress
+                  - RevokeSecurityGroupIngress
+                  - RevokeSecurityGroupEgress
+  
+Outputs:
+  InstanceID:
+    Description: "Instance ID created by this template"
+    Value: !Ref InstanceReachabilityInstance
+  InternetGatewayID:
+    Description: "ID for the internet gateway created by this template"
+    Value: !Ref InstanceReachabilityIGW
+  InstanceReachabilityAssessmentFunctionARN:
+    Description: "Reachability Assesment Lambda Function ARN"
+    Value: !GetAtt InstanceReachabilityAssessmentFunction.Arn
+  InstanceReachabilityAssessmentFunctionRoleARN:
+    Description: "ARN for the role attached to the lambda function"
+    Value: !GetAtt InstanceReachabilityAssessmentRole.Arn
+  SecurityGroupID:
+    Description: "ID for the security group created by this template"
+    Value: !Ref InstanceReachabilitySecurityGroup
+  SNSTopicARN:
+    Description: "ARN for SNS Topic"
+    Value: !Ref InstanceReachabilityAssessmentSNSTopic
+  
+  
