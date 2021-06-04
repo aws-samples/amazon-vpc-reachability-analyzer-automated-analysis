@@ -103,6 +103,7 @@ Resources:
     Properties: 
       DisplayName: !Ref SnsTopicName
       TopicName: !Ref SnsTopicName
+      KmsMasterKeyId: "alias/aws/sns"
   InstanceReachabilityAssessmentRole:
     Type: AWS::IAM::Role
     Properties: 
